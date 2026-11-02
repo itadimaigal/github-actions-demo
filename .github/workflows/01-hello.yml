@@ -1,0 +1,26 @@
+# Your first workflow: runs on every push, or when you click "Run workflow".
+name: 01 Hello Actions
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  say-hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Greet
+        run: echo "Hello from GitHub Actions!"
+
+      - name: Show some context
+        run: |
+          echo "Repository:   ${{ github.repository }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Commit:       ${{ github.sha }}"
+          echo "Triggered by: ${{ github.event_name }} from ${{ github.actor }}"
+
+      - name: What's installed on the runner?
+        run: |
+          uname -a
+          node --version
+          docker --version
