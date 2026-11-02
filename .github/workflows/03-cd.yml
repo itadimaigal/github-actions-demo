@@ -1,0 +1,111 @@
+# Continuous delivery: every push to main is tested, packaged and deployed.
+name: 03 CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deployments at the same time; queue them instead.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/reusable-test.yml
+
+  # 1. Build a Docker image and push it to GitHub Container Registry (ghcr.io).
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the image name (must be lowercase)
+        id: name
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.name.outputs.image }}
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 2. Deploy the static status page to GitHub Pages.
+  #    One-time setup: Settings > Pages > Source: "GitHub Actions".
+  pages:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # 3. Deploy the container to your own server over SSH.
+  #    Skipped until you add the DEPLOY_HOST variable (see README).
+  production:
+    needs: docker
+    if: vars.DEPLOY_HOST != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: http://${{ vars.DEPLOY_HOST }}
+    steps:
+      - name: Set up the SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull and restart the container
+        env:
+          IMAGE: ${{ needs.docker.outputs.image }}
+          TARGET: ${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$TARGET" "
+            docker pull $IMAGE &&
+            (docker rm -f demo || true) &&
+            docker run -d --name demo --restart unless-stopped -p 80:3000 $IMAGE"
+
+      - name: Smoke test
+        run: curl --fail --retry 5 --retry-delay 3 "http://${{ vars.DEPLOY_HOST }}/health"

@@ -1,0 +1,16 @@
+# Scheduled run: test against the older Node version every night, reusing the shared workflow.
+name: 04 Nightly
+
+on:
+  schedule:
+    - cron: "30 20 * * *"   # 20:30 UTC = 2:00 AM IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-node-22:
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      node-version: "22"
